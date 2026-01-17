@@ -1,34 +1,51 @@
-let prepareScriptPid: [string, number][] = [];
-const DelayBetweenBacthes: number = 5;
 const MultStep: number = 0.01;
 const MultStepStart: number = -0.5 + MultStep;
 const Weaken1Name = "weak.js";
 const Weaken2Name = "weak2.js";
 const GrowName = "grow.js";
 const HackName = "hack.js";
-const MaxWorkerCount = 300000;
-const PrintLog = true;
+const InstallBackDoor = "backdoor.ts";
+const BuyProg = "buyprog.ts";
+const BruteSSH: [string, boolean] = ["BruteSSH.exe", false];
+const FTPCrack: [string, boolean] = ["FTPCrack.exe", false];
+const RelaySMTP: [string, boolean] = ["RelaySMTP.exe", false];
+const HTTPWorm: [string, boolean] = ["HTTPWorm.exe", false];
+const SQLInject: [string, boolean] = ["SQLInject.exe", false];
+const Deep1: [string, boolean, boolean] = ["DeepScanV1.exe", false, false];
+const Deep2: [string, boolean, boolean] = ["DeepScanV2.exe", false, false];
+const MaxWorkerCount = 50000;
+const MaxPrepTime = 300;
+const PrintWorkerLog = false;
+const PrintMasterLog = false;
+const TPrintBatchRun = true;
+const SortAsPrepeared = true;
 
 /** @param {NS} ns **/
 export async function main(ns: NS) {
+  debugger;
   DisableLog(ns);
+  let prepareScriptPid: [string, number][] = [];
   let scanned = false;
-  let deep1 = ns.fileExists("DeepScanV1.exe");
-  let deep2 = ns.fileExists("DeepScanV2.exe");
   let servDTO: ServerDTO[] = [];
   let checkPreStart = true;
   let prepearingInProgress = false;
   let preStartProcList: [string, number][] = [];
   let anyPreped = false;
-  let totalWorkerCount = 0;
+  let ownedServers = ns.getPurchasedServers().length;
   while (true) {
-    if (!deep1 && ns.fileExists("DeepScanV1.exe")) {
+    let player = ns.getPlayer();
+    if (ownedServers != ns.getPurchasedServers().length) {
       scanned = false;
-      deep1 = true;
+      ownedServers = ns.getPurchasedServers().length;
     }
-    if (!deep2 && ns.fileExists("DeepScanV2.exe")) {
+    await BuyPrograms(ns, player);
+    if (!Deep1[2]) {
       scanned = false;
-      deep2 = true;
+      Deep1[2] = true;
+    }
+    if (!Deep2[2]) {
+      scanned = false;
+      Deep2[2] = true;
     }
     if (!scanned) {
       let servers: string[] = [];
@@ -45,7 +62,7 @@ export async function main(ns: NS) {
           newItem.server = ns.getServer(server);
           servDTO.push(newItem);
           serversToScan = serversToScan.concat(ns.scan(server));
-          await ns.scp([
+          ns.scp([
             Weaken1Name,
             Weaken2Name,
             GrowName,
@@ -59,22 +76,25 @@ export async function main(ns: NS) {
       let res = CheckPreStartScripts(ns, servDTO, preStartProcList);
       preStartProcList = res[1];
       checkPreStart = res[0];
-      await ns.sleep(100);
-      continue;
     }
-    prepearingInProgress = !CheckIfPrepeareFinished(ns);
-    let player = ns.getPlayer();
+    else {
+      prepearingInProgress = !CheckIfPrepeareFinished(ns, prepareScriptPid);
+      if (!prepearingInProgress)
+        preStartProcList = [];
+    }
     ClearValuesForServer(servDTO);
-    totalWorkerCount = OpenPortsAndUpdateServerInfo(ns, servDTO);
-    servDTO.sort((a, b) => SortCompareServers(ns, a, b, player));
+    OpenPortsAndUpdateServerInfo(ns, servDTO, player);
+    //if (servDTO.some((a) => !a.server.backdoorInstalled))
+    //InstallBackDoors(ns, servDTO, player);
     let totalAvailableThreads = 0;
     for (let server of servDTO) {
       totalAvailableThreads = CalculateRunningThreadsForServer(ns, server, totalAvailableThreads);
     }
+    servDTO.sort((a, b) => SortCompareServers(ns, a, b, player, totalAvailableThreads));
     if (!servDTO.some((a) => !a.needPrep && (a.server?.moneyMax ?? 0) > 0)) {
       let noodlesServ = servDTO.find((a) => a.server.hostname == "n00dles") ?? servDTO[0];
       if (noodlesServ.needPrep && !prepearingInProgress) {
-        PrepServerBatch(ns, noodlesServ, totalAvailableThreads, servDTO);
+        PrepServerBatch(ns, noodlesServ, servDTO, prepareScriptPid);
         prepearingInProgress = true;
         anyPreped = false;
         await ns.sleep(0);
@@ -83,58 +103,129 @@ export async function main(ns: NS) {
     else { anyPreped = true; }
     if (!anyPreped) {
       await ns.sleep(0);
+      if (PrintMasterLog)
+        ns.tprint("Waiting any prep");
       continue;
     }
-    debugger;
-    for (let servInfo of servDTO) {
-      if (checkPreStart && !preStartProcList.some((a) => a[0] == servInfo.server.hostname) || servInfo.needPrep) {
+    else if (player.skills.hacking > 500 && player.skills.hacking < 1000) {
+      let joeServ = servDTO.find((a) => a.server.hostname == "joesguns") ?? servDTO[0];
+      if (joeServ.needPrep && !prepearingInProgress) {
+        PrepServerBatch(ns, joeServ, servDTO, prepareScriptPid);
+        prepearingInProgress = true;
+        await ns.sleep(0);
         continue;
       }
-      let totaTime = servInfo.bacthInfo.totalTime;
-      let batchCount = totalAvailableThreads / servInfo.bacthInfo.totalThreads;
-      /*if (totaTime / DelayBetweenBacthes > batchCount) {
-        ns.tprint(`Server:${servInfo.server.hostname} too small for all bacthes:${batchCount}, totalTime:${totaTime}`);
+    }
+    else if (player.skills.hacking > 1000) {
+      let joeServ = servDTO.find((a) => a.server.hostname == "phantasy") ?? servDTO[0];
+      if (joeServ.needPrep && !prepearingInProgress) {
+        PrepServerBatch(ns, joeServ, servDTO, prepareScriptPid);
+        prepearingInProgress = true;
+        await ns.sleep(0);
         continue;
-      }*/
-      if (totalAvailableThreads > servInfo.bacthInfo.totalThreads) {
-        if (servInfo.server.moneyMax != 0 && servInfo.server.hasAdminRights &&
-          totalAvailableThreads > 0 && (servInfo.server.hackDifficulty ?? 0) < player.skills.hacking) {
-          let now = Date.now() - ns.getResetInfo().lastAugReset;
-          if (totalAvailableThreads > servInfo.bacthInfo.totalThreads &&
-            now - servInfo.bacthInfo.totalTime > servInfo.lastBatchFinishTime) {
-            if (servInfo.needPrep) {
-              ns.tprint("Desync:" + servInfo.server.hostname);
-              ns.tprint(`Now ${now}, start time ${now - servInfo.bacthInfo.totalTime}, prev batch end time ${servInfo.lastBatchFinishTime}`)
-              ns.exit();
-            }
-            ns.tprint(`Batch started ${now}, prev batch end time ${servInfo.lastBatchFinishTime}`)
-            while (totalAvailableThreads > servInfo.bacthInfo.totalThreads) {
-              let launchedCount = RunScriptsForTarget(ns, HackName, servInfo.server.hostname, servInfo.bacthInfo.hackThreadCount, servDTO, servInfo.bacthInfo.hackDelay);
-              totalAvailableThreads -= launchedCount;
-              launchedCount = RunScriptsForTarget(ns, Weaken1Name, servInfo.server.hostname, servInfo.bacthInfo.weaken1ThreadCount, servDTO, servInfo.bacthInfo.weaken1Delay);
-              totalAvailableThreads -= launchedCount;
-              launchedCount = RunScriptsForTarget(ns, GrowName, servInfo.server.hostname, servInfo.bacthInfo.growThreadCount, servDTO, servInfo.bacthInfo.growDelay);
-              totalAvailableThreads -= launchedCount;
-              launchedCount = RunScriptsForTarget(ns, Weaken2Name, servInfo.server.hostname, servInfo.bacthInfo.weaken2ThreadCount, servDTO, servInfo.bacthInfo.weaken2Delay);
-              totalAvailableThreads -= launchedCount;
-              servInfo.lastBatchFinishTime = now + servInfo.bacthInfo.totalTime + DelayBetweenBacthes;
-              ns.exit();
-            }
+      }
+    }
+    if (PrintMasterLog)
+      ns.tprint("Cycle start");
+    let batchCount = 0;
+    let switchToPrep = false;
+
+    //todo copy pred proc ID to localStorage to survive restart and avoid multi prep
+    if (player.skills.hacking > 100 && !prepearingInProgress) {
+      let offset = servDTO.findIndex((a) => a.needPrep)
+      let searchCount = 0;
+      while (/*searchCount < 7 &&*/offset < servDTO.length && !(switchToPrep = CalculateIfNextTargetIsBetter(ns, totalAvailableThreads, servDTO[0], servDTO[offset]))) {
+        if (!servDTO[offset + 1].needPrep) {
+          while (offset < servDTO.length && (!servDTO[offset].needPrep || servDTO[offset].server.purchasedByPlayer)) {
+            offset++
           }
         }
+        else { offset++; }
+        //if ((servDTO[offset].server.requiredHackingSkill ?? 0) < player.skills.hacking / 2)
+        //  searchCount++;
       }
-      else if (servInfo.needPrep && !prepearingInProgress) {
-        ns.tprint(`Not enough threads:${servInfo.server.hostname}`)
-        totalAvailableThreads -= PrepServerBatch(ns, servInfo, totalAvailableThreads, servDTO);
+      let prepTarget = servDTO[offset];
+      //let prepTarget = servDTO.find((a) => a.needPrep && a.bestMultValuePerThread > servDTO[0].bestMultValuePerThread)
+      if (switchToPrep && prepTarget && (preStartProcList.length == 0 || (preStartProcList.length > 0 && !preStartProcList.some(([str, num]) => str == prepTarget.server.hostname)))) {
+        const prepStats = PrepServerBatch(ns, prepTarget, servDTO, prepareScriptPid);
+        totalAvailableThreads -= prepStats[0];
+        prepearingInProgress = true;
+        switchToPrep = false;
+        if (TPrintBatchRun) ns.tprint(`Launched additional prep: ${prepTarget.server.hostname},totalThreads: ${prepStats[0]}, prepTime: ${prepStats[1]}`);
       }
-      else if (prepearingInProgress || totalAvailableThreads == 0) {
+    }
+    if (servDTO[0].needPrep) {
+      ns.tprint("Desync:" + servDTO[0].server.hostname);
+      //ns.tprint(`Now ${now}, start time ${now - servInfo.bacthInfo.totalTime}, prev batch end time ${servInfo.lastBatchFinishTime}`)
+      ns.exit();
+    }
+    for (const servInfo of servDTO) {
+      if (totalAvailableThreads == 0 || batchCount != 0)
+        break;
+      if ((checkPreStart && !preStartProcList.some(([str, num]) => str == servInfo.server.hostname)) || servInfo.needPrep) {
+        continue;
+      }
+      if (totalAvailableThreads >= servInfo.bacthInfo.totalThreads) {
+        if (servInfo.server.moneyMax != 0 && servInfo.server.hasAdminRights &&
+          totalAvailableThreads > 0 && (servInfo.server.hackDifficulty ?? 0) < player.skills.hacking) {
+          let startTime = Date.now();
+          let startTimeUpdated = Date.now();
+          while (totalAvailableThreads >= servInfo.bacthInfo.totalThreads && batchCount < MaxWorkerCount) {
+            let setPortAndBreak = false;
+            //hacking to fast for easy server, need to change target, todo
+            if (Date.now() - startTime > servInfo.bacthInfo.totalTime)
+              setPortAndBreak = true;
+            if (Date.now() - startTimeUpdated > 200) {
+              startTimeUpdated = Date.now();
+              await ns.sleep(15);
+            }
+            //if (PrintMasterLog) ns.tprint(`Starting batch on: ${servInfo.server.hostname}, totalThreads: ${totalAvailableThreads}`);
+            let needToWritePort = false;
+            if (totalAvailableThreads - servInfo.bacthInfo.totalThreads < servInfo.bacthInfo.totalThreads || totalAvailableThreads == servInfo.bacthInfo.totalThreads || setPortAndBreak) {
+              needToWritePort = true;
+              if (PrintMasterLog)
+                ns.tprint("enable write port");
+            }
+            batchCount++;
+            let launchedCount = RunScriptsForTarget(ns, HackName, servInfo.server.hostname, servInfo.bacthInfo.hackThreadCount, servDTO, servInfo.bacthInfo.hackDelay, prepareScriptPid);
+            totalAvailableThreads -= launchedCount;
+            launchedCount = RunScriptsForTarget(ns, Weaken1Name, servInfo.server.hostname, servInfo.bacthInfo.weaken1ThreadCount, servDTO, servInfo.bacthInfo.weaken1Delay, prepareScriptPid);
+            totalAvailableThreads -= launchedCount;
+            launchedCount = RunScriptsForTarget(ns, GrowName, servInfo.server.hostname, servInfo.bacthInfo.growThreadCount, servDTO, servInfo.bacthInfo.growDelay, prepareScriptPid);
+            totalAvailableThreads -= launchedCount;
+            launchedCount = RunScriptsForTarget(ns, Weaken2Name, servInfo.server.hostname, servInfo.bacthInfo.weaken2ThreadCount, servDTO, servInfo.bacthInfo.weaken2Delay, prepareScriptPid, false, needToWritePort);
+            totalAvailableThreads -= launchedCount;
+            if (launchedCount == 0) {
+              if (PrintMasterLog)
+                ns.tprint("Zero launnched: " + servInfo.server.hostname);
+            }
+            if (setPortAndBreak)
+              break;
+            //servInfo.lastBatchFinishTime = now + servInfo.bacthInfo.totalTime + DelayBetweenBacthes;
+          }
+          if (PrintMasterLog)
+            ns.tprint("Finishedd launch: " + servInfo.server.hostname);
+          if (totalAvailableThreads > servInfo.bacthInfo.totalThreads) {
+            ns.tprint("Have threads for more baatchs after finish: " + servInfo.server.hostname);
+          }
+          break;
+        }
+      }
+      else if (totalAvailableThreads == 0) {
+        if (PrintMasterLog) ns.tprint("ending while");
         break;
       }
     }
-    if (!prepearingInProgress && totalAvailableThreads > 0) {
-      ns.tprint("FreeThreads:" + totalAvailableThreads);
+    if (PrintMasterLog)
+      ns.tprint(`Cycle end, batch started: ${batchCount}, threadPerBatch: ${servDTO[0].bacthInfo.totalThreads}`);
+    if (TPrintBatchRun && (!prepearingInProgress && totalAvailableThreads == 0)) {
+      ns.tprint(`FreeThreads: ${totalAvailableThreads},batches: ${batchCount}, threadPerBatch: ${servDTO[0].bacthInfo.totalThreads}`);
     }
-    await ns.sleep(0);
+    if (batchCount != 0) {
+      await ns.nextPortWrite(1);
+      ns.clearPort(1);
+    }
+    else { await ns.sleep(0); }
   }
 }
 
@@ -161,53 +252,95 @@ function DisableLog(ns: NS) {
   ns.disableLog("scan");
   ns.disableLog("sleep");
 }
-function PrepServerBatch(ns: NS, server: ServerDTO, threadsAvailable: number, availableServers: ServerDTO[]): number {
+function CalculateIfNextTargetIsBetter(ns: NS, freeTrheads: number, currentTarget: ServerDTO, nextTarget: ServerDTO): boolean {
+  let res = false;
+  if (nextTarget.server.hasAdminRights) {
+    let totalCurrentBatchProfit = Math.floor(freeTrheads / currentTarget.bacthInfo.totalThreads) * currentTarget.bacthInfo.totalThreads * currentTarget.bestMultValuePerThread;
+    let nextCurrentBatchProfit = Math.floor(freeTrheads / nextTarget.bacthInfo.totalThreads) * nextTarget.bacthInfo.totalThreads * nextTarget.bestMultValuePerThread;
+    if (totalCurrentBatchProfit < nextCurrentBatchProfit) {
+      const temp = CalculatePrepNeeded(ns, nextTarget);
+      const prepTreadsTotal = temp[0] + temp[1] + temp[2];
+      const totalTimePrepPerRun = Math.max(temp[3], temp[4], temp[5]);
+      const totalPrepTime = Math.max(1, Math.floor(prepTreadsTotal / freeTrheads)) * totalTimePrepPerRun;
+      const moneyLostOnCurrentTarget = totalPrepTime / currentTarget.bacthInfo.totalTime * totalCurrentBatchProfit
+      const moneyGainedDuringPrepOnNextTarget = totalPrepTime / nextTarget.bacthInfo.totalTime * nextCurrentBatchProfit;
+      if ((prepTreadsTotal < freeTrheads && totalPrepTime / 1000 < MaxPrepTime * 2) || (totalPrepTime / 1000 < MaxPrepTime && moneyLostOnCurrentTarget < moneyGainedDuringPrepOnNextTarget))
+        res = true;
+    }
+  }
+  return res;
+}
+function PrepServerBatch(ns: NS, server: ServerDTO, availableServers: ServerDTO[], prepareScriptPid: [string, number][]): [number, number] {
+  const temp = CalculatePrepNeeded(ns, server);
+  let weak1threads = temp[0];
+  let weak2threads = temp[1];
+  let growthreads = temp[2];
+  let weak1Time = temp[3];
+  let weak2Time = temp[4];
+  let growTime = temp[5];
+
+  let maxTime: number = Math.max(weak1Time, growTime, weak2Time);
+  let delay: number = maxTime - weak1Time;
+  let launched: number = RunScriptsForTarget(ns, Weaken1Name, server.server.hostname, weak1threads, availableServers, delay, prepareScriptPid, true);
+  delay = maxTime - growTime;
+  launched += RunScriptsForTarget(ns, GrowName, server.server.hostname, growthreads, availableServers, delay, prepareScriptPid, true);
+  delay = maxTime - weak2Time;
+  launched += RunScriptsForTarget(ns, Weaken2Name, server.server.hostname, weak2threads, availableServers, delay, prepareScriptPid, true);
+  return [launched, Math.max(weak1Time, weak2Time, growTime)];
+}
+function CalculatePrepNeeded(ns: NS, server: ServerDTO): [number, number, number, number, number, number] {
   let weak1threads = 0;
   let growthreads = 0;
   let weak2threads = 0;
   let weak1Time = 0;
   let growTime = 0;
   let weak2Time = 0;
-  let cloneServ = structuredClone(server.server);
+  let cloneServ = CreateMockServer(ns, server.server);
   if (cloneServ.hackDifficulty != cloneServ.minDifficulty) {
     let threadNeeded = Math.ceil((ns.getServerSecurityLevel(cloneServ.hostname) - ns.getServerMinSecurityLevel(cloneServ.hostname)) / ns.weakenAnalyze(1, 1));
     weak1threads = threadNeeded;
     weak1Time = ns.formulas.hacking.weakenTime(cloneServ, ns.getPlayer());
-    ns.tprint("Weak1Time: " + weak1Time);
-    ns.tprint("SecLvl: " + ns.getServerSecurityLevel(cloneServ.hostname));
-    cloneServ.hackDifficulty = cloneServ.minDifficulty;
+    if (PrintWorkerLog) {
+      ns.tprint("Weak1Time: " + weak1Time);
+      ns.tprint("SecLvl: " + ns.getServerSecurityLevel(cloneServ.hostname));
+    }
+    //cloneServ.hackDifficulty = cloneServ.minDifficulty;
   }
-  if (cloneServ.moneyMax != cloneServ.moneyAvailable && cloneServ.minDifficulty && cloneServ.moneyMax) {
+  if (cloneServ.moneyMax != cloneServ.moneyAvailable && cloneServ.minDifficulty && cloneServ.moneyMax && cloneServ.hackDifficulty) {
     let threadNeeded = Math.ceil(ns.formulas.hacking.growThreads(cloneServ, ns.getPlayer(), cloneServ.moneyMax, 1));
     growthreads = threadNeeded;
     growTime = ns.formulas.hacking.growTime(cloneServ, ns.getPlayer());
-    ns.tprint("GrowTime: " + growTime);
-    ns.tprint("Money: " + ns.getServerMoneyAvailable(cloneServ.hostname));
+    if (PrintWorkerLog) {
+      ns.tprint("GrowTime: " + growTime);
+      ns.tprint("Money: " + ns.getServerMoneyAvailable(cloneServ.hostname));
+    }
 
+    //cloneServ.hackDifficulty = cloneServ.minDifficulty + growthreads * 0.004;
     cloneServ.hackDifficulty = cloneServ.minDifficulty + growthreads * 0.004;
     weak2Time = ns.formulas.hacking.weakenTime(cloneServ, ns.getPlayer());
-    ns.tprint("Weak2Time: " + weak2Time);
+    if (PrintWorkerLog) {
+      ns.tprint("Weak2Time: " + weak2Time);
+    }
     weak2threads = Math.ceil((cloneServ.hackDifficulty - cloneServ.minDifficulty) / ns.weakenAnalyze(1, 1));
-
   }
-
-  let maxTime: number = Math.max(weak1Time, growTime, weak2Time);
-  let delay: number = maxTime - weak1Time;
-  let launched: number = RunScriptsForTarget(ns, Weaken1Name, cloneServ.hostname, weak1threads, availableServers, delay, true);
-  delay = maxTime - growTime;
-  launched += RunScriptsForTarget(ns, GrowName, cloneServ.hostname, growthreads, availableServers, delay, true);
-  delay = maxTime - weak2Time;
-  launched += RunScriptsForTarget(ns, Weaken2Name, cloneServ.hostname, weak2threads, availableServers, delay, true);
-  return threadsAvailable - launched;
+  return [weak1threads, weak2threads, growthreads, weak1Time, weak2Time, growTime];
 }
-function RunScriptsForTarget(ns: NS, scriptName: string, target: string, threadCount: number, availableServers: ServerDTO[], delay: number, prepareScript: boolean = false): number {
+function RunScriptsForTarget(ns: NS, scriptName: string, target: string,
+  threadCount: number, availableServers: ServerDTO[], delay: number,
+  prepareScriptPid: [string, number][],
+  prepareScript: boolean = false, writeToPort = false): number {
   let threadStarted = 0;
+  let needToWrite = false;
   if (threadCount > 0) {
     let threadsToRun = threadCount;
     for (let servInfo of availableServers) {
       if (servInfo.threadsAvailable > 0) {
         if (threadsToRun <= servInfo.threadsAvailable) {
-          let launchedPid = ns.exec(scriptName, servInfo.server.hostname, threadsToRun, target, delay, PrintLog);
+          if (writeToPort) {
+            needToWrite = true;
+          }
+
+          let launchedPid = ns.exec(scriptName, servInfo.server.hostname, threadsToRun, target, delay, PrintWorkerLog, writeToPort, needToWrite);
           if (launchedPid == 0) {
             ns.print("ThreadToLaunchOnserver: " + threadsToRun + "; " + (ns.getServerMaxRam(servInfo.server.hostname) - ns.getServerUsedRam(servInfo.server.hostname)))
           }
@@ -219,7 +352,7 @@ function RunScriptsForTarget(ns: NS, scriptName: string, target: string, threadC
           threadsToRun = 0;
         }
         else {
-          let launchedPid = ns.exec(scriptName, servInfo.server.hostname, servInfo.threadsAvailable, target, delay, PrintLog);
+          let launchedPid = ns.exec(scriptName, servInfo.server.hostname, servInfo.threadsAvailable, target, delay, PrintWorkerLog, writeToPort);
           if (launchedPid == 0) {
             ns.print("ThreadToLaunchOnserver: " + threadsToRun + "; " + (ns.getServerMaxRam(servInfo.server.hostname) - ns.getServerUsedRam(servInfo.server.hostname)))
           }
@@ -236,6 +369,7 @@ function RunScriptsForTarget(ns: NS, scriptName: string, target: string, threadC
       }
     }
   }
+  if (writeToPort && !needToWrite) { debugger; }
   return threadStarted;
 }
 function CalculateRunningThreadsForServer(ns: NS, server: ServerDTO, totalAvailableThreads: number): number {
@@ -244,7 +378,7 @@ function CalculateRunningThreadsForServer(ns: NS, server: ServerDTO, totalAvaila
     let ramAvailable = ns.getServerMaxRam(server.server.hostname) - ns.getServerUsedRam(server.server.hostname);
     if (server.server.hostname == "home") {
       let runningScripts = ns.ps(server.server.hostname);
-      if (!runningScripts.some((a) => a.filename == "gang.ts") && ramAvailable - ns.getScriptRam("gang.ts") > 0)
+      if (ns.gang.inGang() && !runningScripts.some((a) => a.filename == "gang.ts") && ramAvailable - ns.getScriptRam("gang.ts") > 0)
         ramAvailable -= ns.getScriptRam("gang.ts");
       if (!runningScripts.some((a) => a.filename == "buy.js") && ramAvailable - ns.getScriptRam("buy.js") > 0)
         ramAvailable -= ns.getScriptRam("buy.js");
@@ -254,38 +388,115 @@ function CalculateRunningThreadsForServer(ns: NS, server: ServerDTO, totalAvaila
         ramAvailable -= ns.getScriptRam("contr/manageContr.js");
     }
 
-    server.threadsAvailable += Math.floor(ramAvailable / ramPerThread);
+    server.threadsAvailable = Math.floor(ramAvailable / ramPerThread);
     totalAvailableThreads += server.threadsAvailable;
   }
   return totalAvailableThreads;
 }
-function OpenPortsAndUpdateServerInfo(ns: NS, servDTO: ServerDTO[]): number {
-  let res = 0;
+async function BuyPrograms(ns: NS, player: Player) {
+  let pids: number[] = [];
+  if (player.money > 200000) {
+    ns.singularity.purchaseTor();
+  }
+  if (!ns.fileExists(Deep1[0])) {
+    if (player.money > 500000) {
+      pids.push(ns.exec(BuyProg, "home", 1, Deep1[0]));
+      Deep1[1] = true;
+    }
+  }
+  else {
+    Deep1[1] = true;
+  }
+  if (!ns.fileExists(BruteSSH[0])) {
+    if (player.money > 500000) {
+      pids.push(ns.exec(BuyProg, "home", 1, BruteSSH[0]));
+      BruteSSH[1] = true;
+    }
+  }
+  else {
+    BruteSSH[1] = true;
+  }
+  if (!ns.fileExists(FTPCrack[0])) {
+    if (player.money > 1500000) {
+      pids.push(ns.exec(BuyProg, "home", 1, FTPCrack[0]));
+      FTPCrack[1] = true;
+    }
+  }
+  else {
+    FTPCrack[1] = true;
+  }
+  if (!ns.fileExists(RelaySMTP[0])) {
+    if (player.money > 5000000) {
+      pids.push(ns.exec(BuyProg, "home", 1, RelaySMTP[0]));
+      RelaySMTP[1] = true;
+    }
+  }
+  else {
+    RelaySMTP[1] = true;
+  }
+  if (!ns.fileExists(Deep2[0])) {
+    if (player.money > 25000000) {
+      pids.push(ns.exec(BuyProg, "home", 1, Deep2[0]));
+      Deep2[1] = true;
+    }
+  }
+  else {
+    Deep2[1] = true;
+  }
+  if (!ns.fileExists(HTTPWorm[0])) {
+    if (player.money > 30000000) {
+      pids.push(ns.exec(BuyProg, "home", 1, HTTPWorm[0]));
+      HTTPWorm[1] = true;
+    }
+  }
+  else {
+    HTTPWorm[1] = true;
+  }
+  if (!ns.fileExists(SQLInject[0])) {
+    if (player.money > 250000000) {
+      pids.push(ns.exec(BuyProg, "home", 1, SQLInject[0]));
+      SQLInject[1] = true;
+    }
+  }
+  else {
+    SQLInject[1] = true;
+  }
+  while (ns.ps().some((a) => pids.includes(a.pid))) {
+    await ns.sleep(1);
+  }
+}
+async function OpenPortsAndUpdateServerInfo(ns: NS, servDTO: ServerDTO[], player: Player) {
   for (let server of servDTO) {
     server.server = ns.getServer(server.server.hostname);
     let openPorts = 0;
-    if (ns.fileExists("BruteSSH.exe")) {
-      ns.brutessh(server.server.hostname);
-      openPorts++;
-    }
-    if (ns.fileExists("FTPCrack.exe")) {
-      ns.ftpcrack(server.server.hostname);
-      openPorts++;
-    }
-    if (ns.fileExists("RelaySMTP.exe")) {
-      ns.relaysmtp(server.server.hostname);
-      openPorts++;
-    }
-    if (ns.fileExists("HTTPWorm.exe")) {
-      ns.httpworm(server.server.hostname);
-      openPorts++;
-    }
-    if (ns.fileExists("SQLInject.exe")) {
-      ns.sqlinject(server.server.hostname);
-      openPorts++;
-    }
-    if (ns.getServerNumPortsRequired(server.server.hostname) <= openPorts) {
-      ns.nuke(server.server.hostname);
+    if (!server.server.hasAdminRights) {
+      if (!server.server.sshPortOpen && BruteSSH[1]) {
+        ns.brutessh(server.server.hostname);
+        openPorts++;
+      }
+      if (!server.server.ftpPortOpen && FTPCrack[1]) {
+        ns.ftpcrack(server.server.hostname);
+        openPorts++;
+
+      }
+      if (!server.server.smtpPortOpen && RelaySMTP[1]) {
+        ns.relaysmtp(server.server.hostname);
+        openPorts++;
+
+      }
+      if (!server.server.httpPortOpen && HTTPWorm[1]) {
+        ns.httpworm(server.server.hostname);
+        openPorts++;
+
+      }
+      if (!server.server.sqlPortOpen && SQLInject[1]) {
+        ns.sqlinject(server.server.hostname);
+        openPorts++;
+
+      }
+      if (ns.getServerNumPortsRequired(server.server.hostname) <= openPorts) {
+        ns.nuke(server.server.hostname);
+      }
     }
 
     if (server.server.moneyMax != server.server.moneyAvailable) {
@@ -297,17 +508,19 @@ function OpenPortsAndUpdateServerInfo(ns: NS, servDTO: ServerDTO[]): number {
     else {
       server.needPrep = false;
     }
-    for (let info of ns.ps(server.server.hostname)) {
+  }
+}
+/*async function InstallBackDoors(ns: NS, servDTO: ServerDTO[], player: Player) {
+  for (let server of servDTO) {
+    if (server.server.hasAdminRights && !server.server.backdoorInstalled && !server.server.purchasedByPlayer &&
+      server.server.hostname != "home" && player.skills.hacking > (server.server.requiredHackingSkill ?? 0)) {
 
-      if (info.filename == Weaken1Name || info.filename == Weaken2Name ||
-        info.filename == GrowName || info.filename == HackName) {
-        res += 1;
-      }
+      ns.exec(InstallBackDoor, "home", 1, server.server.hostname);
+      break;
     }
   }
-  return res;
-}
-function CheckIfPrepeareFinished(ns: NS): boolean {
+}*/
+function CheckIfPrepeareFinished(ns: NS, prepareScriptPid: [string, number][]): boolean {
   let res = true;
   for (let item of prepareScriptPid) {
     let runningScripts = ns.ps(item[0]);
@@ -333,25 +546,32 @@ function ClearValuesForServer(servers: ServerDTO[]) {
     item.bestMultValuePerThread = -1;
   }
 }
-function SortCompareServers(ns: NS, x: ServerDTO, y: ServerDTO, player: Player) {
+function SortCompareServers(ns: NS, x: ServerDTO, y: ServerDTO, player: Player, freeThreads: number) {
   let res1 = x.bestMultValuePerThread;
   let res2 = y.bestMultValuePerThread;
   let bestMult1 = 0;
   let bestMult2 = 0;
   let batchInfo1 = new BacthCalcInfo();
   let batchInfo2 = new BacthCalcInfo();
-
+  let tempRes1 = 0;
+  let tempRes2 = 0;
+  //already calculated, just compare
   if (res1 == -1 || res2 == -1) {
-    for (let i = 0; i < (1 - MultStep * 2) / MultStep; i++) {
+    //best multiplier loop
+    for (let i = (1 - MultStep * 2) / MultStep - 1; i > -1; i--) {
       let mult = MultStepStart + (i * MultStep);
 
       for (let servItem = 0; servItem < 2; servItem++) {
-        let servInfo: Server = {} as Server;
-        if (servItem == 0) { servInfo = structuredClone(x.server, {}); }
-        else { servInfo = structuredClone(y.server); }
-
         if ((servItem == 0 && res1 == -1) || (servItem == 1 && res2 == -1)) {
+          let servInfo: Server = {} as Server;
+          //item X & Y for loop
+          if (servItem == 0) { servInfo = CreateMockServer(ns, x.server); }
+          else { servInfo = CreateMockServer(ns, y.server); }
           if (servInfo.hackDifficulty && servInfo.minDifficulty && servInfo.moneyMax) {
+            if (SortAsPrepeared) {
+              servInfo.hackDifficulty = servInfo.minDifficulty;
+              servInfo.moneyAvailable = servInfo.moneyMax;
+            }
             let hackPercent = ns.formulas.hacking.hackPercent(servInfo, player);
             let hackThreads = Math.ceil((0.5 + mult) / hackPercent);
             let hackTime = ns.formulas.hacking.hackTime(servInfo, player);
@@ -366,18 +586,22 @@ function SortCompareServers(ns: NS, x: ServerDTO, y: ServerDTO, player: Player) 
             let growThreads = ns.formulas.hacking.growThreads(servInfo, player, servInfo.moneyMax, 1);
 
             servInfo.hackDifficulty = servInfo.minDifficulty + growThreads * 0.004;
-            let weaken2Time = ns.formulas.hacking.weakenTime(servInfo, player);
             let weakenThreads2 = Math.ceil((servInfo.hackDifficulty - servInfo.minDifficulty) / ns.weakenAnalyze(1, 1));
+            servInfo.hackDifficulty = servInfo.minDifficulty;
+            let weaken2Time = ns.formulas.hacking.weakenTime(servInfo, player);
             let time = Math.max(hackTime, weaken1Time, growTime, weaken2Time);
 
             let thrCount = hackThreads + weakenThreads1 + weakenThreads2 + growThreads;
+            if (Math.floor(freeThreads / thrCount) > MaxWorkerCount || freeThreads < thrCount)
+              continue;
             let moneyPerS = servInfo.moneyMax * (0.5 + mult) / time * 1000;
             let monPerT = servInfo.moneyMax / thrCount;
             let sPerT = moneyPerS / thrCount;
-
+            let sPerTPerBatch = Math.floor(freeThreads / thrCount) * sPerT;
+            //fill batch info for x\y
             if (servItem == 0) {
-              if (res1 != Math.max(res1, sPerT)) {
-                res1 = Math.max(res1, sPerT);
+              if (tempRes1 != Math.max(tempRes1, sPerTPerBatch)) {
+                tempRes1 = Math.max(tempRes1, sPerTPerBatch);
                 bestMult1 = mult;
 
                 batchInfo1.growThreadCount = growThreads;
@@ -397,12 +621,12 @@ function SortCompareServers(ns: NS, x: ServerDTO, y: ServerDTO, player: Player) 
                 batchInfo1.totalTime = time;
               }
               x.bestMult = bestMult1;
-              x.bestMultValuePerThread = res1;
+              x.bestMultValuePerThread = tempRes1;
               x.bacthInfo = batchInfo1;
             } else {
               let delayOffset = 0;
-              if (res2 != Math.max(res2, sPerT)) {
-                res2 = Math.max(res2, sPerT);
+              if (tempRes2 != Math.max(tempRes2, sPerTPerBatch)) {
+                tempRes2 = Math.max(tempRes2, sPerTPerBatch);
                 bestMult2 = mult;
 
                 batchInfo2.growThreadCount = growThreads;
@@ -413,7 +637,7 @@ function SortCompareServers(ns: NS, x: ServerDTO, y: ServerDTO, player: Player) 
                 batchInfo2.weaken1Delay = time - weaken1Time;
                 batchInfo2.growDelay = time - growTime;
                 batchInfo2.weaken2Delay = time - weaken2Time;
-                
+
                 batchInfo1.weak1Time = weaken1Time;
                 batchInfo1.weak2Time = weaken2Time;
                 batchInfo1.growTime = growTime;
@@ -422,7 +646,7 @@ function SortCompareServers(ns: NS, x: ServerDTO, y: ServerDTO, player: Player) 
                 batchInfo2.totalTime = time;
               }
               y.bestMult = bestMult2;
-              y.bestMultValuePerThread = res2;
+              y.bestMultValuePerThread = tempRes2;
               y.bacthInfo = batchInfo2;
             }
           }
@@ -430,8 +654,16 @@ function SortCompareServers(ns: NS, x: ServerDTO, y: ServerDTO, player: Player) 
       }
     }
   }
-  if (x.server.moneyMax == 0)
+  if (res1 == -1)
+    res1 = tempRes1;
+  if (res2 == -1)
+    res2 = tempRes2;
+  if (x.server.moneyMax == 0 && y.server.moneyMax == 0)
+    return 0;
+  else if (x.server.moneyMax == 0)
     return 1;
+  else if (y.server.moneyMax == 0)
+    return -1;
   if ((x.needPrep && y.needPrep) || (!x.needPrep && !y.needPrep)) {
     return res2 - res1;
   }
@@ -442,6 +674,38 @@ function SortCompareServers(ns: NS, x: ServerDTO, y: ServerDTO, player: Player) 
   }
 
 }
+
+function CreateMockServer(ns: NS, serv: Server): Server {
+  // Create a fresh mock server object
+  const res = ns.formulas.mockServer();
+
+  res.backdoorInstalled = serv.backdoorInstalled;
+  res.baseDifficulty = serv.baseDifficulty;
+  res.cpuCores = serv.cpuCores;
+  res.ftpPortOpen = serv.ftpPortOpen;
+  res.hackDifficulty = serv.hackDifficulty;
+  res.hasAdminRights = serv.hasAdminRights;
+  res.hostname = serv.hostname;
+  res.httpPortOpen = serv.httpPortOpen;
+  res.ip = serv.ip;
+  res.isConnectedTo = serv.isConnectedTo;
+  res.maxRam = serv.maxRam;
+  res.minDifficulty = serv.minDifficulty;
+  res.moneyAvailable = serv.moneyAvailable;
+  res.moneyMax = serv.moneyMax;
+  res.numOpenPortsRequired = serv.numOpenPortsRequired;
+  res.openPortCount = serv.openPortCount;
+  res.organizationName = serv.organizationName;
+  res.purchasedByPlayer = serv.purchasedByPlayer;
+  res.ramUsed = serv.ramUsed;
+  res.requiredHackingSkill = serv.requiredHackingSkill;
+  res.serverGrowth = serv.serverGrowth;
+  res.smtpPortOpen = serv.smtpPortOpen;
+  res.sqlPortOpen = serv.sqlPortOpen;
+  res.sshPortOpen = serv.sshPortOpen;
+  return res;
+}
+
 
 //check if any scripts exist and server need to be ignored until finished
 function CheckPreStartScripts(ns: NS, serverDTO: ServerDTO[], currentList: [string, number][]): [boolean, [string, number][]] {
@@ -483,7 +747,7 @@ class ServerDTO {
   public preStartScripts = false;
   public bacthInfo: BacthCalcInfo = {} as BacthCalcInfo;
   public needPrep = false;
-  public lastBatchFinishTime = 0;
+  //public lastBatchFinishTime = 0;
 }
 class BacthCalcInfo {
   public hackThreadCount: number = 0;
