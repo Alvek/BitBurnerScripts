@@ -9,7 +9,8 @@ export async function main(ns: NS) {
   // Run
   //const params = JSON.parse(ns.args[0] as string)
   let params = new CalcResetInputParams();
-  //params = params.fromJSON(ns.args[0] as string);
+  if (ns.args[0])
+    params = params.fromJSON(ns.args[0] as string);
   let maxNumOfResets = params.maxNumOfResets;
   let port = params.port;
   let tPrint = params.tPrint;
@@ -53,6 +54,7 @@ function timeMultResets(...N: number[]): number {
   return temp;
 }
 
+/** Time with any resets. Array version. Progres preserved */
 function timeMultResetsV2(N: number[]): number {
   let totalTime = 0;
   let prevFavor = 0;
@@ -75,7 +77,7 @@ function timeMultResetsV2(N: number[]): number {
 }
 
 
-/** Time with any resets. Array version 
+/** Time with any resets. Array version. Progres lost on reset
 function timeMultResetsV2(N: number[]): number {
   let idx = 0;
   let temp = repAtTable[N[idx++]] / BASE_RATE;
