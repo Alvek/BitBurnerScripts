@@ -1,3 +1,5 @@
+import { WorkerPort, BuyTorOrProgPort, EnterFactionOrBackdoorPort } from "Const.ts";
+
 const MultStep: number = 0.01;
 const MultStepStart: number = -0.5 + MultStep;
 const Weaken1Name = "weak.js";
@@ -6,19 +8,16 @@ const GrowName = "grow.js";
 const HackName = "hack.js";
 const InstallBackDoor = "backdoor.ts";
 const BuyProg = "buyprog.ts";
-const BruteSSH: [string, boolean] = ["BruteSSH.exe", false];
-const FTPCrack: [string, boolean] = ["FTPCrack.exe", false];
-const RelaySMTP: [string, boolean] = ["RelaySMTP.exe", false];
-const HTTPWorm: [string, boolean] = ["HTTPWorm.exe", false];
-const SQLInject: [string, boolean] = ["SQLInject.exe", false];
-const Deep1: [string, boolean, boolean] = ["DeepScanV1.exe", false, false];
-const Deep2: [string, boolean, boolean] = ["DeepScanV2.exe", false, false];
-const MaxWorkerCount = 50000;
+const BuyTor = "buyTor.ts";
+const EnterFaction = "joinFaction.ts";
+const MaxWorkerCount = 50_000;
 const MaxPrepTime = 300;
 const PrintWorkerLog = false;
 const PrintMasterLog = false;
 const TPrintBatchRun = true;
 const SortAsPrepeared = true;
+const TimePerSingleExec = 3.7;
+
 
 /** @param {NS} ns **/
 export async function main(ns: NS) {
@@ -32,20 +31,21 @@ export async function main(ns: NS) {
   let preStartProcList: [string, number][] = [];
   let anyPreped = false;
   let ownedServers = ns.getPurchasedServers().length;
+  const progData = new ProgData();
+  const backdoorStatus = new BackDoorServersStatus();
   while (true) {
     let player = ns.getPlayer();
-    if (ownedServers != ns.getPurchasedServers().length) {
+    if (ownedServers != 25 && ownedServers != ns.getPurchasedServers().length) {
       scanned = false;
       ownedServers = ns.getPurchasedServers().length;
     }
-    await BuyPrograms(ns, player);
-    if (!Deep1[2]) {
+    if (!progData.Deep1[2]) {
       scanned = false;
-      Deep1[2] = true;
+      progData.Deep1[2] = true;
     }
-    if (!Deep2[2]) {
+    if (!progData.Deep2[2]) {
       scanned = false;
-      Deep2[2] = true;
+      progData.Deep2[2] = true;
     }
     if (!scanned) {
       let servers: string[] = [];
@@ -72,6 +72,8 @@ export async function main(ns: NS) {
       }
       scanned = true;
     }
+    if (!progData.AllBought)
+      await BuyPrograms(ns, progData, player);
     if (checkPreStart) {
       let res = CheckPreStartScripts(ns, servDTO, preStartProcList);
       preStartProcList = res[1];
@@ -83,9 +85,11 @@ export async function main(ns: NS) {
         preStartProcList = [];
     }
     ClearValuesForServer(servDTO);
-    OpenPortsAndUpdateServerInfo(ns, servDTO, player);
-    //if (servDTO.some((a) => !a.server.backdoorInstalled))
-    //InstallBackDoors(ns, servDTO, player);
+    OpenPortsAndUpdateServerInfo(ns, servDTO, progData, player);
+    if (!backdoorStatus.AllDone) {
+      for (let item of backdoorStatus.backdoorServerList)
+        InstallBackDoors(ns, item, player);
+    }
     let totalAvailableThreads = 0;
     for (let server of servDTO) {
       totalAvailableThreads = CalculateRunningThreadsForServer(ns, server, totalAvailableThreads);
@@ -94,9 +98,10 @@ export async function main(ns: NS) {
     if (!servDTO.some((a) => !a.needPrep && (a.server?.moneyMax ?? 0) > 0)) {
       let noodlesServ = servDTO.find((a) => a.server.hostname == "n00dles") ?? servDTO[0];
       if (noodlesServ.needPrep && !prepearingInProgress) {
-        PrepServerBatch(ns, noodlesServ, servDTO, prepareScriptPid);
+        const prepRes = PrepServerBatch(ns, noodlesServ, servDTO, prepareScriptPid, player);
         prepearingInProgress = true;
         anyPreped = false;
+        totalAvailableThreads -= prepRes[0];
         await ns.sleep(0);
       }
     }
@@ -107,10 +112,21 @@ export async function main(ns: NS) {
         ns.tprint("Waiting any prep");
       continue;
     }
+    else if (player.skills.hacking > 100 && player.skills.hacking < 500) {
+      let joeServ = servDTO.find((a) => a.server.hostname == "joesguns") ?? servDTO[0];
+      if (joeServ.needPrep && !prepearingInProgress) {
+        const prepRes = PrepServerBatch(ns, joeServ, servDTO, prepareScriptPid, player);
+        totalAvailableThreads -= prepRes[0];
+        prepearingInProgress = true;
+        await ns.sleep(0);
+        continue;
+      }
+    }
     else if (player.skills.hacking > 500 && player.skills.hacking < 1000) {
       let joeServ = servDTO.find((a) => a.server.hostname == "joesguns") ?? servDTO[0];
       if (joeServ.needPrep && !prepearingInProgress) {
-        PrepServerBatch(ns, joeServ, servDTO, prepareScriptPid);
+        const prepRes = PrepServerBatch(ns, joeServ, servDTO, prepareScriptPid, player);
+        totalAvailableThreads -= prepRes[0];
         prepearingInProgress = true;
         await ns.sleep(0);
         continue;
@@ -119,7 +135,8 @@ export async function main(ns: NS) {
     else if (player.skills.hacking > 1000) {
       let joeServ = servDTO.find((a) => a.server.hostname == "phantasy") ?? servDTO[0];
       if (joeServ.needPrep && !prepearingInProgress) {
-        PrepServerBatch(ns, joeServ, servDTO, prepareScriptPid);
+        const prepRes = PrepServerBatch(ns, joeServ, servDTO, prepareScriptPid, player);
+        totalAvailableThreads -= prepRes[0];
         prepearingInProgress = true;
         await ns.sleep(0);
         continue;
@@ -131,23 +148,30 @@ export async function main(ns: NS) {
     let switchToPrep = false;
 
     //todo copy pred proc ID to localStorage to survive restart and avoid multi prep
-    if (player.skills.hacking > 100 && !prepearingInProgress) {
+    if (player.skills.hacking > 30 && !prepearingInProgress) {
       let offset = servDTO.findIndex((a) => a.needPrep)
-      let searchCount = 0;
-      while (/*searchCount < 7 &&*/offset < servDTO.length && !(switchToPrep = CalculateIfNextTargetIsBetter(ns, totalAvailableThreads, servDTO[0], servDTO[offset]))) {
-        if (!servDTO[offset + 1].needPrep) {
-          while (offset < servDTO.length && (!servDTO[offset].needPrep || servDTO[offset].server.purchasedByPlayer)) {
-            offset++
+      if ((servDTO[offset].bacthInfo.totalTime > (TimePerSingleExec * Math.max(1, Math.floor(servDTO[0].bacthInfo.totalThreads / totalAvailableThreads) + 1000)))) {
+        while (offset < servDTO.length && !(switchToPrep = CalculateIfNextTargetIsBetter(ns, totalAvailableThreads, servDTO[0], servDTO[offset], player))) {
+          if (!servDTO[offset + 1].needPrep) {
+            while (offset < servDTO.length && (!servDTO[offset].needPrep || servDTO[offset].server.purchasedByPlayer)) {
+              offset++
+            }
           }
+          else { offset++; }
         }
-        else { offset++; }
-        //if ((servDTO[offset].server.requiredHackingSkill ?? 0) < player.skills.hacking / 2)
-        //  searchCount++;
+      } else {
+        const timePerBatch = TimePerSingleExec * Math.max(1, Math.floor(servDTO[0].bacthInfo.totalThreads / totalAvailableThreads)) + 1000;
+        const item = GetBestTargetWithTime(ns, totalAvailableThreads, servDTO, player, timePerBatch);
+        if (item)
+          offset = servDTO.indexOf(item);
+        else {
+          ns.tprint("No server with better time");
+          ns.exit();
+        }
       }
       let prepTarget = servDTO[offset];
-      //let prepTarget = servDTO.find((a) => a.needPrep && a.bestMultValuePerThread > servDTO[0].bestMultValuePerThread)
       if (switchToPrep && prepTarget && (preStartProcList.length == 0 || (preStartProcList.length > 0 && !preStartProcList.some(([str, num]) => str == prepTarget.server.hostname)))) {
-        const prepStats = PrepServerBatch(ns, prepTarget, servDTO, prepareScriptPid);
+        const prepStats = PrepServerBatch(ns, prepTarget, servDTO, prepareScriptPid, player);
         totalAvailableThreads -= prepStats[0];
         prepearingInProgress = true;
         switchToPrep = false;
@@ -156,7 +180,6 @@ export async function main(ns: NS) {
     }
     if (servDTO[0].needPrep) {
       ns.tprint("Desync:" + servDTO[0].server.hostname);
-      //ns.tprint(`Now ${now}, start time ${now - servInfo.bacthInfo.totalTime}, prev batch end time ${servInfo.lastBatchFinishTime}`)
       ns.exit();
     }
     for (const servInfo of servDTO) {
@@ -168,20 +191,18 @@ export async function main(ns: NS) {
       if (totalAvailableThreads >= servInfo.bacthInfo.totalThreads) {
         if (servInfo.server.moneyMax != 0 && servInfo.server.hasAdminRights &&
           totalAvailableThreads > 0 && (servInfo.server.hackDifficulty ?? 0) < player.skills.hacking) {
-          let startTime = Date.now();
-          let startTimeUpdated = Date.now();
-          while (totalAvailableThreads >= servInfo.bacthInfo.totalThreads && batchCount < MaxWorkerCount) {
-            let setPortAndBreak = false;
-            //hacking to fast for easy server, need to change target, todo
-            if (Date.now() - startTime > servInfo.bacthInfo.totalTime)
-              setPortAndBreak = true;
-            if (Date.now() - startTimeUpdated > 200) {
-              startTimeUpdated = Date.now();
+          const startTime = performance.now();
+          let startTimeUpdated = performance.now();
+          while (totalAvailableThreads >= servInfo.bacthInfo.totalThreads) {
+            if (performance.now() - startTimeUpdated > 200) {
+              startTimeUpdated = performance.now();
               await ns.sleep(15);
             }
-            //if (PrintMasterLog) ns.tprint(`Starting batch on: ${servInfo.server.hostname}, totalThreads: ${totalAvailableThreads}`);
             let needToWritePort = false;
-            if (totalAvailableThreads - servInfo.bacthInfo.totalThreads < servInfo.bacthInfo.totalThreads || totalAvailableThreads == servInfo.bacthInfo.totalThreads || setPortAndBreak) {
+            const breakAndStop = (batchCount > MaxWorkerCount) || (performance.now() - startTime > servInfo.bacthInfo.totalTime - (servInfo.bacthInfo.totalTime / 10));
+            if (breakAndStop ||
+              (totalAvailableThreads - servInfo.bacthInfo.totalThreads < servInfo.bacthInfo.totalThreads)
+              || (totalAvailableThreads == servInfo.bacthInfo.totalThreads)) {
               needToWritePort = true;
               if (PrintMasterLog)
                 ns.tprint("enable write port");
@@ -199,16 +220,14 @@ export async function main(ns: NS) {
               if (PrintMasterLog)
                 ns.tprint("Zero launnched: " + servInfo.server.hostname);
             }
-            if (setPortAndBreak)
+            if (breakAndStop)
               break;
-            //servInfo.lastBatchFinishTime = now + servInfo.bacthInfo.totalTime + DelayBetweenBacthes;
           }
           if (PrintMasterLog)
             ns.tprint("Finishedd launch: " + servInfo.server.hostname);
           if (totalAvailableThreads > servInfo.bacthInfo.totalThreads) {
             ns.tprint("Have threads for more baatchs after finish: " + servInfo.server.hostname);
           }
-          break;
         }
       }
       else if (totalAvailableThreads == 0) {
@@ -222,8 +241,8 @@ export async function main(ns: NS) {
       ns.tprint(`FreeThreads: ${totalAvailableThreads},batches: ${batchCount}, threadPerBatch: ${servDTO[0].bacthInfo.totalThreads}`);
     }
     if (batchCount != 0) {
-      await ns.nextPortWrite(1);
-      ns.clearPort(1);
+      await ns.nextPortWrite(WorkerPort);
+      ns.clearPort(WorkerPort);
     }
     else { await ns.sleep(0); }
   }
@@ -232,33 +251,22 @@ export async function main(ns: NS) {
 function DisableLog(ns: NS) {
   ns.disableLog("disableLog");
   ns.disableLog("ftpcrack");
-  ns.disableLog("getServerSecurityLevel");
-  ns.disableLog("getServerNumPortsRequired");
   ns.disableLog("sqlinject");
   ns.disableLog("relaysmtp");
   ns.disableLog("httpworm");
   ns.disableLog("brutessh");
   ns.disableLog("nuke");
   ns.disableLog("scp");
-  ns.disableLog("getServerUsedRam");
-  ns.disableLog("getServerMaxRam");
-  ns.disableLog("getScriptRam");
-  ns.disableLog("hackAnalyze");
-  ns.disableLog("getServerMoneyAvailable");
-  ns.disableLog("getServerGrowth");
-  ns.disableLog("getServerMinSecurityLevel");
-  ns.disableLog("hackAnalyzeChance");
-  ns.disableLog("getServerMaxMoney");
   ns.disableLog("scan");
   ns.disableLog("sleep");
 }
-function CalculateIfNextTargetIsBetter(ns: NS, freeTrheads: number, currentTarget: ServerDTO, nextTarget: ServerDTO): boolean {
+function CalculateIfNextTargetIsBetter(ns: NS, freeTrheads: number, currentTarget: ServerDTO, nextTarget: ServerDTO, player: Player): boolean {
   let res = false;
   if (nextTarget.server.hasAdminRights) {
-    let totalCurrentBatchProfit = Math.floor(freeTrheads / currentTarget.bacthInfo.totalThreads) * currentTarget.bacthInfo.totalThreads * currentTarget.bestMultValuePerThread;
-    let nextCurrentBatchProfit = Math.floor(freeTrheads / nextTarget.bacthInfo.totalThreads) * nextTarget.bacthInfo.totalThreads * nextTarget.bestMultValuePerThread;
+    const totalCurrentBatchProfit = Math.floor(freeTrheads / currentTarget.bacthInfo.totalThreads) * currentTarget.bacthInfo.totalThreads * currentTarget.bestMultValuePerThread;
+    const nextCurrentBatchProfit = Math.floor(freeTrheads / nextTarget.bacthInfo.totalThreads) * nextTarget.bacthInfo.totalThreads * nextTarget.bestMultValuePerThread;
     if (totalCurrentBatchProfit < nextCurrentBatchProfit) {
-      const temp = CalculatePrepNeeded(ns, nextTarget);
+      const temp = CalculatePrepNeeded(ns, nextTarget, player);
       const prepTreadsTotal = temp[0] + temp[1] + temp[2];
       const totalTimePrepPerRun = Math.max(temp[3], temp[4], temp[5]);
       const totalPrepTime = Math.max(1, Math.floor(prepTreadsTotal / freeTrheads)) * totalTimePrepPerRun;
@@ -270,16 +278,32 @@ function CalculateIfNextTargetIsBetter(ns: NS, freeTrheads: number, currentTarge
   }
   return res;
 }
-function PrepServerBatch(ns: NS, server: ServerDTO, availableServers: ServerDTO[], prepareScriptPid: [string, number][]): [number, number] {
-  const temp = CalculatePrepNeeded(ns, server);
-  let weak1threads = temp[0];
-  let weak2threads = temp[1];
-  let growthreads = temp[2];
-  let weak1Time = temp[3];
-  let weak2Time = temp[4];
-  let growTime = temp[5];
+function GetBestTargetWithTime(ns: NS, freeTrheads: number, servDTO: ServerDTO[], player: Player, timeToRunBatch: number): ServerDTO | undefined {
+  const filteredList = servDTO.filter((a) => a.bacthInfo.totalTime > timeToRunBatch + 1000);
+  let res = undefined;
+  for (let item of filteredList) {
+    const temp = CalculatePrepNeeded(ns, item, player);
+    const prepTreadsTotal = temp[0] + temp[1] + temp[2];
+    const totalTimePrepPerRun = Math.max(temp[3], temp[4], temp[5]);
+    const totalPrepTime = Math.max(1, Math.floor(prepTreadsTotal / freeTrheads)) * totalTimePrepPerRun;
 
-  let maxTime: number = Math.max(weak1Time, growTime, weak2Time);
+    if (totalPrepTime / 1000 < MaxPrepTime) {
+      res = item;
+      break;
+    }
+  }
+  return res;
+}
+function PrepServerBatch(ns: NS, server: ServerDTO, availableServers: ServerDTO[], prepareScriptPid: [string, number][], player: Player): [number, number] {
+  const temp = CalculatePrepNeeded(ns, server, player);
+  const weak1threads = temp[0];
+  const weak2threads = temp[1];
+  const growthreads = temp[2];
+  const weak1Time = temp[3];
+  const weak2Time = temp[4];
+  const growTime = temp[5];
+
+  const maxTime: number = Math.max(weak1Time, growTime, weak2Time);
   let delay: number = maxTime - weak1Time;
   let launched: number = RunScriptsForTarget(ns, Weaken1Name, server.server.hostname, weak1threads, availableServers, delay, prepareScriptPid, true);
   delay = maxTime - growTime;
@@ -288,7 +312,7 @@ function PrepServerBatch(ns: NS, server: ServerDTO, availableServers: ServerDTO[
   launched += RunScriptsForTarget(ns, Weaken2Name, server.server.hostname, weak2threads, availableServers, delay, prepareScriptPid, true);
   return [launched, Math.max(weak1Time, weak2Time, growTime)];
 }
-function CalculatePrepNeeded(ns: NS, server: ServerDTO): [number, number, number, number, number, number] {
+function CalculatePrepNeeded(ns: NS, server: ServerDTO, player: Player): [number, number, number, number, number, number] {
   let weak1threads = 0;
   let growthreads = 0;
   let weak2threads = 0;
@@ -296,23 +320,23 @@ function CalculatePrepNeeded(ns: NS, server: ServerDTO): [number, number, number
   let growTime = 0;
   let weak2Time = 0;
   let cloneServ = CreateMockServer(ns, server.server);
-  if (cloneServ.hackDifficulty != cloneServ.minDifficulty) {
-    let threadNeeded = Math.ceil((ns.getServerSecurityLevel(cloneServ.hostname) - ns.getServerMinSecurityLevel(cloneServ.hostname)) / ns.weakenAnalyze(1, 1));
+  if (cloneServ.hackDifficulty != cloneServ.minDifficulty && cloneServ.hackDifficulty && cloneServ.minDifficulty) {
+    let threadNeeded = Math.ceil((cloneServ.hackDifficulty - cloneServ.minDifficulty) / ns.weakenAnalyze(1, 1));
     weak1threads = threadNeeded;
-    weak1Time = ns.formulas.hacking.weakenTime(cloneServ, ns.getPlayer());
+    weak1Time = ns.formulas.hacking.weakenTime(cloneServ, player);
     if (PrintWorkerLog) {
       ns.tprint("Weak1Time: " + weak1Time);
-      ns.tprint("SecLvl: " + ns.getServerSecurityLevel(cloneServ.hostname));
+      ns.tprint("SecLvl: " + cloneServ.hackDifficulty);
     }
     //cloneServ.hackDifficulty = cloneServ.minDifficulty;
   }
   if (cloneServ.moneyMax != cloneServ.moneyAvailable && cloneServ.minDifficulty && cloneServ.moneyMax && cloneServ.hackDifficulty) {
-    let threadNeeded = Math.ceil(ns.formulas.hacking.growThreads(cloneServ, ns.getPlayer(), cloneServ.moneyMax, 1));
+    let threadNeeded = Math.ceil(ns.formulas.hacking.growThreads(cloneServ, player, cloneServ.moneyMax, 1));
     growthreads = threadNeeded;
-    growTime = ns.formulas.hacking.growTime(cloneServ, ns.getPlayer());
+    growTime = ns.formulas.hacking.growTime(cloneServ, player);
     if (PrintWorkerLog) {
       ns.tprint("GrowTime: " + growTime);
-      ns.tprint("Money: " + ns.getServerMoneyAvailable(cloneServ.hostname));
+      ns.tprint("Money: " + cloneServ.moneyAvailable);
     }
 
     //cloneServ.hackDifficulty = cloneServ.minDifficulty + growthreads * 0.004;
@@ -342,7 +366,7 @@ function RunScriptsForTarget(ns: NS, scriptName: string, target: string,
 
           let launchedPid = ns.exec(scriptName, servInfo.server.hostname, threadsToRun, target, delay, PrintWorkerLog, writeToPort, needToWrite);
           if (launchedPid == 0) {
-            ns.print("ThreadToLaunchOnserver: " + threadsToRun + "; " + (ns.getServerMaxRam(servInfo.server.hostname) - ns.getServerUsedRam(servInfo.server.hostname)))
+            ns.print("ThreadToLaunchOnserver: " + threadsToRun + "; " + (servInfo.server.maxRam - servInfo.server.ramUsed))
           }
           else if (prepareScript) {
             prepareScriptPid.push([servInfo.server.hostname, launchedPid]);
@@ -354,7 +378,7 @@ function RunScriptsForTarget(ns: NS, scriptName: string, target: string,
         else {
           let launchedPid = ns.exec(scriptName, servInfo.server.hostname, servInfo.threadsAvailable, target, delay, PrintWorkerLog, writeToPort);
           if (launchedPid == 0) {
-            ns.print("ThreadToLaunchOnserver: " + threadsToRun + "; " + (ns.getServerMaxRam(servInfo.server.hostname) - ns.getServerUsedRam(servInfo.server.hostname)))
+            ns.print("ThreadToLaunchOnserver: " + threadsToRun + "; " + (servInfo.server.maxRam - servInfo.server.ramUsed))
           }
           else if (prepareScript) {
             prepareScriptPid.push([servInfo.server.hostname, launchedPid]);
@@ -373,9 +397,9 @@ function RunScriptsForTarget(ns: NS, scriptName: string, target: string,
   return threadStarted;
 }
 function CalculateRunningThreadsForServer(ns: NS, server: ServerDTO, totalAvailableThreads: number): number {
-  if (ns.hasRootAccess(server.server.hostname)) {
+  if (server.server.hasAdminRights) {
     let ramPerThread = ns.getScriptRam(Weaken1Name);
-    let ramAvailable = ns.getServerMaxRam(server.server.hostname) - ns.getServerUsedRam(server.server.hostname);
+    let ramAvailable = server.server.maxRam - server.server.ramUsed;
     if (server.server.hostname == "home") {
       let runningScripts = ns.ps(server.server.hostname);
       if (ns.gang.inGang() && !runningScripts.some((a) => a.filename == "gang.ts") && ramAvailable - ns.getScriptRam("gang.ts") > 0)
@@ -393,108 +417,138 @@ function CalculateRunningThreadsForServer(ns: NS, server: ServerDTO, totalAvaila
   }
   return totalAvailableThreads;
 }
-async function BuyPrograms(ns: NS, player: Player) {
-  let pids: number[] = [];
-  if (player.money > 200000) {
-    ns.singularity.purchaseTor();
+async function BuyPrograms(ns: NS, progData: ProgData, player: Player) {
+  if (player.money > 200_000 && !ns.hasTorRouter()) {
+    ns.exec(BuyTor, "home", 1);
+    await ns.nextPortWrite(BuyTorOrProgPort);
+    ns.clearPort(BuyTorOrProgPort);
+    player.money -= 200_000;
   }
-  if (!ns.fileExists(Deep1[0])) {
-    if (player.money > 500000) {
-      pids.push(ns.exec(BuyProg, "home", 1, Deep1[0]));
-      Deep1[1] = true;
+  if (!ns.fileExists(progData.Deep1[0])) {
+    if (player.money > 500_000) {
+      player.money -= 500_000;
+      ns.exec(BuyProg, "home", 1, progData.Deep1[0]);
+      progData.Deep1[1] = true;
+      await ns.nextPortWrite(BuyTorOrProgPort);
+      ns.clearPort(BuyTorOrProgPort);
     }
   }
   else {
-    Deep1[1] = true;
+    progData.Deep1[1] = true;
   }
-  if (!ns.fileExists(BruteSSH[0])) {
-    if (player.money > 500000) {
-      pids.push(ns.exec(BuyProg, "home", 1, BruteSSH[0]));
-      BruteSSH[1] = true;
+  if (!ns.fileExists(progData.BruteSSH[0])) {
+    if (player.money > 500_000) {
+      player.money -= 500_000;
+      ns.exec(BuyProg, "home", 1, progData.BruteSSH[0]);
+      progData.BruteSSH[1] = true;
+      await ns.nextPortWrite(BuyTorOrProgPort);
+      ns.clearPort(BuyTorOrProgPort);
     }
   }
   else {
-    BruteSSH[1] = true;
+    progData.BruteSSH[1] = true;
   }
-  if (!ns.fileExists(FTPCrack[0])) {
-    if (player.money > 1500000) {
-      pids.push(ns.exec(BuyProg, "home", 1, FTPCrack[0]));
-      FTPCrack[1] = true;
+  if (!ns.fileExists(progData.FTPCrack[0])) {
+    if (player.money > 1_500_000) {
+      player.money -= 1_500_000;
+      ns.exec(BuyProg, "home", 1, progData.FTPCrack[0]);
+      progData.FTPCrack[1] = true;
+      await ns.nextPortWrite(BuyTorOrProgPort);
+      ns.clearPort(BuyTorOrProgPort);
     }
   }
   else {
-    FTPCrack[1] = true;
+    progData.FTPCrack[1] = true;
   }
-  if (!ns.fileExists(RelaySMTP[0])) {
-    if (player.money > 5000000) {
-      pids.push(ns.exec(BuyProg, "home", 1, RelaySMTP[0]));
-      RelaySMTP[1] = true;
+  if (!ns.fileExists(progData.RelaySMTP[0])) {
+    if (player.money > 5_000_000) {
+      player.money -= 5_000_000;
+      ns.exec(BuyProg, "home", 1, progData.RelaySMTP[0]);
+      progData.RelaySMTP[1] = true;
+      await ns.nextPortWrite(BuyTorOrProgPort);
+      ns.clearPort(BuyTorOrProgPort);
     }
   }
   else {
-    RelaySMTP[1] = true;
+    progData.RelaySMTP[1] = true;
   }
-  if (!ns.fileExists(Deep2[0])) {
-    if (player.money > 25000000) {
-      pids.push(ns.exec(BuyProg, "home", 1, Deep2[0]));
-      Deep2[1] = true;
+  if (!ns.fileExists(progData.Deep2[0])) {
+    if (player.money > 25_000_000) {
+      player.money -= 25_000_000;
+      ns.exec(BuyProg, "home", 1, progData.Deep2[0]);
+      progData.Deep2[1] = true;
+      await ns.nextPortWrite(BuyTorOrProgPort);
+      ns.clearPort(BuyTorOrProgPort);
     }
   }
   else {
-    Deep2[1] = true;
+    progData.Deep2[1] = true;
   }
-  if (!ns.fileExists(HTTPWorm[0])) {
-    if (player.money > 30000000) {
-      pids.push(ns.exec(BuyProg, "home", 1, HTTPWorm[0]));
-      HTTPWorm[1] = true;
+  if (!ns.fileExists(progData.HTTPWorm[0])) {
+    if (player.money > 30_000_000) {
+      player.money -= 30_000_000;
+      ns.exec(BuyProg, "home", 1, progData.HTTPWorm[0]);
+      progData.HTTPWorm[1] = true;
+      await ns.nextPortWrite(BuyTorOrProgPort);
+      ns.clearPort(BuyTorOrProgPort);
     }
   }
   else {
-    HTTPWorm[1] = true;
+    progData.HTTPWorm[1] = true;
   }
-  if (!ns.fileExists(SQLInject[0])) {
-    if (player.money > 250000000) {
-      pids.push(ns.exec(BuyProg, "home", 1, SQLInject[0]));
-      SQLInject[1] = true;
+  if (!ns.fileExists(progData.SQLInject[0])) {
+    if (player.money > 250_000_000) {
+      player.money -= 250_000_000;
+      ns.exec(BuyProg, "home", 1, progData.SQLInject[0]);
+      progData.SQLInject[1] = true;
+      await ns.nextPortWrite(BuyTorOrProgPort);
+      ns.clearPort(BuyTorOrProgPort);
     }
   }
   else {
-    SQLInject[1] = true;
-  }
-  while (ns.ps().some((a) => pids.includes(a.pid))) {
-    await ns.sleep(1);
+    progData.SQLInject[1] = true;
   }
 }
-async function OpenPortsAndUpdateServerInfo(ns: NS, servDTO: ServerDTO[], player: Player) {
+function OpenPortsAndUpdateServerInfo(ns: NS, servDTO: ServerDTO[], progData: ProgData, player: Player) {
   for (let server of servDTO) {
     server.server = ns.getServer(server.server.hostname);
     let openPorts = 0;
     if (!server.server.hasAdminRights) {
-      if (!server.server.sshPortOpen && BruteSSH[1]) {
+      if (server.server.sshPortOpen) {
+        openPorts++;
+      } else if (progData.BruteSSH[1]) {
         ns.brutessh(server.server.hostname);
         openPorts++;
       }
-      if (!server.server.ftpPortOpen && FTPCrack[1]) {
+      if (server.server.ftpPortOpen) {
+        openPorts++;
+      }
+      else if (progData.FTPCrack[1]) {
         ns.ftpcrack(server.server.hostname);
         openPorts++;
-
       }
-      if (!server.server.smtpPortOpen && RelaySMTP[1]) {
+      if (server.server.smtpPortOpen) {
+        openPorts++;
+      }
+      else if (progData.RelaySMTP[1]) {
         ns.relaysmtp(server.server.hostname);
         openPorts++;
-
       }
-      if (!server.server.httpPortOpen && HTTPWorm[1]) {
+      if (server.server.httpPortOpen) {
+        openPorts++;
+      }
+      else if (progData.HTTPWorm[1]) {
         ns.httpworm(server.server.hostname);
         openPorts++;
-
       }
-      if (!server.server.sqlPortOpen && SQLInject[1]) {
+      if (server.server.sqlPortOpen) {
+        openPorts++;
+      }
+      else if (progData.SQLInject[1]) {
         ns.sqlinject(server.server.hostname);
         openPorts++;
-
       }
-      if (ns.getServerNumPortsRequired(server.server.hostname) <= openPorts) {
+      if ((server.server.numOpenPortsRequired ?? 0) <= openPorts) {
         ns.nuke(server.server.hostname);
       }
     }
@@ -510,16 +564,22 @@ async function OpenPortsAndUpdateServerInfo(ns: NS, servDTO: ServerDTO[], player
     }
   }
 }
-/*async function InstallBackDoors(ns: NS, servDTO: ServerDTO[], player: Player) {
-  for (let server of servDTO) {
-    if (server.server.hasAdminRights && !server.server.backdoorInstalled && !server.server.purchasedByPlayer &&
-      server.server.hostname != "home" && player.skills.hacking > (server.server.requiredHackingSkill ?? 0)) {
+async function InstallBackDoors(ns: NS, item: BackDoorStatusItem, player: Player) {
+  const servItem = ns.getServer(item.name)
+  if (servItem.hasAdminRights && !servItem.backdoorInstalled && !servItem.purchasedByPlayer &&
+    servItem.hostname != "home" && player.skills.hacking > (servItem.requiredHackingSkill ?? 0)) {
 
-      ns.exec(InstallBackDoor, "home", 1, server.server.hostname);
-      break;
-    }
+    ns.exec(InstallBackDoor, "home", 1, servItem.hostname);
+    await ns.nextPortWrite(EnterFactionOrBackdoorPort);
+    ns.clearPort(EnterFactionOrBackdoorPort);
+    item.backdoored = true;
+    ns.exec(EnterFaction, "home", 1, item.factionName);
+    await ns.nextPortWrite(EnterFactionOrBackdoorPort);
+    const joined = ns.readPort(EnterFactionOrBackdoorPort) as boolean;
+    ns.clearPort(EnterFactionOrBackdoorPort);
+    item.enteredFaction = joined;
   }
-}*/
+}
 function CheckIfPrepeareFinished(ns: NS, prepareScriptPid: [string, number][]): boolean {
   let res = true;
   for (let item of prepareScriptPid) {
@@ -767,5 +827,53 @@ class BacthCalcInfo {
   get totalThreads(): number {
     return this.hackThreadCount + this.weaken1ThreadCount + this.weaken2ThreadCount +
       this.growThreadCount;
+  }
+}
+
+class ProgData {
+  public BruteSSH: [string, boolean] = ["BruteSSH.exe", false];
+  public FTPCrack: [string, boolean] = ["FTPCrack.exe", false];
+  public RelaySMTP: [string, boolean] = ["RelaySMTP.exe", false];
+  public HTTPWorm: [string, boolean] = ["HTTPWorm.exe", false];
+  public SQLInject: [string, boolean] = ["SQLInject.exe", false];
+  public Deep1: [string, boolean, boolean] = ["DeepScanV1.exe", false, false];
+  public Deep2: [string, boolean, boolean] = ["DeepScanV2.exe", false, false];
+
+  get AllBought(): boolean {
+    return this.BruteSSH[1] && this.FTPCrack[1] && this.RelaySMTP[1] &&
+      this.HTTPWorm[1] && this.SQLInject[1] && this.Deep2[1];
+  }
+}
+
+class BackDoorServersStatus {
+  private allDone = false;
+  public backdoorServerList: BackDoorStatusItem[] = [];
+
+  constructor() {
+    this.backdoorServerList.push(new BackDoorStatusItem("CSEC", true, "CyberSec"));
+    this.backdoorServerList.push(new BackDoorStatusItem("avmnite-02h", true, "NiteSec"));
+    this.backdoorServerList.push(new BackDoorStatusItem("I.I.I.I", true, "The Black Hand"));
+    this.backdoorServerList.push(new BackDoorStatusItem("run4theh111z", true, "BitRunners"));
+  }
+
+  get AllDone(): boolean {
+    if (this.allDone)
+      return true;
+    else {
+      this.allDone = !this.backdoorServerList.some((a) => a.backdoored == false)
+      return this.allDone;
+    }
+  }
+}
+class BackDoorStatusItem {
+  public name: string = "";
+  public backdoored: boolean = false;
+  public enteredFaction: boolean = false;
+  public factionName: string = "";
+
+  constructor(name: string, enteredFaction: boolean, factionName: string) {
+    this.name = name;
+    this.enteredFaction == enteredFaction;
+    this.factionName = factionName;
   }
 }
